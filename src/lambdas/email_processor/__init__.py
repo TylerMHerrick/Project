@@ -1,0 +1,2 @@
+"""Email processor Lambda function."""
+

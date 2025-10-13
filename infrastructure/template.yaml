@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Email-based AI Project Tracking System
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  ProjectDomain:
+    Type: String
+    Description: Domain name for email receiving
+  
+  OpenAIKeySecretName:
+    Type: String
+    Default: openai-api-key
+    Description: Name of the Secrets Manager secret containing OpenAI API key
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 300
+    MemorySize: 512
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        AWS_REGION: !Ref AWS::Region
+        PROJECT_DOMAIN: !Ref ProjectDomain
+        OPENAI_API_KEY_SECRET: !Ref OpenAIKeySecretName
+        EMAIL_BUCKET: !Ref EmailBucket
+        PROJECTS_TABLE: !Ref ProjectsTable
+        EVENTS_TABLE: !Ref EventsTable
+        USERS_TABLE: !Ref UsersTable
+
+Resources:
+  # S3 Bucket for Email Storage
+  EmailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub project-emails-${AWS::AccountId}-${Environment}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldEmails
+            Status: Enabled
+            ExpirationInDays: 90
+
+  # S3 Bucket Policy for SES
+  EmailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EmailBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowSESPuts
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${EmailBucket.Arn}/*
+            Condition:
+              StringEquals:
+                aws:Referer: !Ref AWS::AccountId
+
+  # SNS Topic for Email Notifications
+  EmailReceivedTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub email-received-${Environment}
+      DisplayName: Email Received Notifications
+      KmsMasterKeyId: alias/aws/sns
+
+  # SQS Queue for Email Processing
+  EmailProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub email-processing-queue-${Environment}
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EmailProcessingDLQ.Arn
+        maxReceiveCount: 3
+      KmsMasterKeyId: alias/aws/sqs
+
+  # Dead Letter Queue
+  EmailProcessingDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub email-processing-dlq-${Environment}
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: alias/aws/sqs
+
+  # Subscribe SQS to SNS
+  EmailQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref EmailReceivedTopic
+      Endpoint: !GetAtt EmailProcessingQueue.Arn
+
+  # Allow SNS to send messages to SQS
+  EmailQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EmailProcessingQueue
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt EmailProcessingQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref EmailReceivedTopic
+
+  # DynamoDB Tables
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ProjectTracking-Projects-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: N
+        - AttributeName: client_email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: project_id
+          KeyType: HASH
+        - AttributeName: created_at
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: client_email-index
+          KeySchema:
+            - AttributeName: client_email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false  # Enable in production
+
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ProjectTracking-Events-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: project_id
+          AttributeType: S
+        - AttributeName: event_timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: project_id
+          KeyType: HASH
+        - AttributeName: event_timestamp
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false  # Enable in production
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ProjectTracking-Users-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_email
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  # Lambda Functions
+  EmailProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub email-processor-${Environment}
+      CodeUri: ../src/lambdas/email_processor/
+      Handler: handler.lambda_handler
+      Description: Process incoming emails from SES
+      Environment:
+        Variables:
+          EMAIL_QUEUE_URL: !Ref EmailProcessingQueue
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref EmailBucket
+        - S3WritePolicy:
+            BucketName: !Ref EmailBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProjectsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt EmailProcessingQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${OpenAIKeySecretName}-*
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EmailProcessingQueue.Arn
+            BatchSize: 1
+
+  AIOrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ai-orchestrator-${Environment}
+      CodeUri: ../src/lambdas/ai_orchestrator/
+      Handler: handler.lambda_handler
+      Description: AI orchestration for estimates and analysis
+      Timeout: 600  # 10 minutes for estimate generation
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref EmailBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProjectsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${OpenAIKeySecretName}-*
+
+  ReplySenderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub reply-sender-${Environment}
+      CodeUri: ../src/lambdas/reply_sender/
+      Handler: handler.lambda_handler
+      Description: Send email replies via SES
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref EmailBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendRawEmail
+                - ses:SendEmail
+              Resource: '*'
+
+  # CloudWatch Log Groups
+  EmailProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/email-processor-${Environment}
+      RetentionInDays: 30
+
+  AIOrchestratorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ai-orchestrator-${Environment}
+      RetentionInDays: 30
+
+  ReplySenderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/reply-sender-${Environment}
+      RetentionInDays: 30
+
+  # CloudWatch Alarms
+  EmailProcessorErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub email-processor-errors-${Environment}
+      AlarmDescription: Alert when email processor has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref EmailProcessorFunction
+
+  DLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub email-dlq-messages-${Environment}
+      AlarmDescription: Alert when messages end up in DLQ
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EmailProcessingDLQ.QueueName
+
+Outputs:
+  EmailBucket:
+    Description: S3 bucket for email storage
+    Value: !Ref EmailBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-EmailBucket
+
+  EmailReceivedTopicArn:
+    Description: SNS topic ARN for email notifications
+    Value: !Ref EmailReceivedTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-EmailReceivedTopicArn
+
+  EmailQueueUrl:
+    Description: SQS queue URL for email processing
+    Value: !Ref EmailProcessingQueue
+    Export:
+      Name: !Sub ${AWS::StackName}-EmailQueueUrl
+
+  ProjectsTableName:
+    Description: DynamoDB Projects table name
+    Value: !Ref ProjectsTable
+    Export:
+      Name: !Sub ${AWS::StackName}-ProjectsTable
+
+  EventsTableName:
+    Description: DynamoDB Events table name
+    Value: !Ref EventsTable
+    Export:
+      Name: !Sub ${AWS::StackName}-EventsTable
+
+  UsersTableName:
+    Description: DynamoDB Users table name
+    Value: !Ref UsersTable
+    Export:
+      Name: !Sub ${AWS::StackName}-UsersTable
+
