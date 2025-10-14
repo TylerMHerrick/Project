@@ -21,6 +21,10 @@ def create_tables():
     
     tables_to_create = [
         {
+            'name': Config.ORGANIZATIONS_TABLE,
+            'config': get_organizations_table_config()
+        },
+        {
             'name': Config.PROJECTS_TABLE,
             'config': get_projects_table_config()
         },
@@ -31,6 +35,10 @@ def create_tables():
         {
             'name': Config.USERS_TABLE,
             'config': get_users_table_config()
+        },
+        {
+            'name': Config.API_USAGE_TABLE,
+            'config': get_api_usage_table_config()
         }
     ]
     
@@ -52,24 +60,94 @@ def create_tables():
             raise
 
 
+def get_organizations_table_config():
+    """Get Organizations table configuration."""
+    return {
+        'TableName': Config.ORGANIZATIONS_TABLE,
+        'KeySchema': [
+            {'AttributeName': 'organization_id', 'KeyType': 'HASH'}
+        ],
+        'AttributeDefinitions': [
+            {'AttributeName': 'organization_id', 'AttributeType': 'S'},
+            {'AttributeName': 'email_address', 'AttributeType': 'S'},
+            {'AttributeName': 'subdomain', 'AttributeType': 'S'}
+        ],
+        'BillingMode': 'PAY_PER_REQUEST',
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'email_address-index',
+                'KeySchema': [
+                    {'AttributeName': 'email_address', 'KeyType': 'HASH'}
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            },
+            {
+                'IndexName': 'subdomain-index',
+                'KeySchema': [
+                    {'AttributeName': 'subdomain', 'KeyType': 'HASH'}
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ],
+        'SSESpecification': {'Enabled': True}
+    }
+
+
 def get_projects_table_config():
-    """Get Projects table configuration."""
+    """Get Projects table configuration - Multi-tenant."""
     return {
         'TableName': Config.PROJECTS_TABLE,
         'KeySchema': [
-            {'AttributeName': 'project_id', 'KeyType': 'HASH'},
-            {'AttributeName': 'created_at', 'KeyType': 'RANGE'}
+            {'AttributeName': 'organization_id', 'KeyType': 'HASH'},
+            {'AttributeName': 'project_id_created_at', 'KeyType': 'RANGE'}
         ],
         'AttributeDefinitions': [
-            {'AttributeName': 'project_id', 'AttributeType': 'S'},
-            {'AttributeName': 'created_at', 'AttributeType': 'N'},
-            {'AttributeName': 'client_email', 'AttributeType': 'S'}
+            {'AttributeName': 'organization_id', 'AttributeType': 'S'},
+            {'AttributeName': 'project_id_created_at', 'AttributeType': 'S'},
+            {'AttributeName': 'client_email', 'AttributeType': 'S'},
+            {'AttributeName': 'status', 'AttributeType': 'S'}
+        ],
+        'BillingMode': 'PAY_PER_REQUEST',
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'client_email-index',
+                'KeySchema': [
+                    {'AttributeName': 'client_email', 'KeyType': 'HASH'}
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            },
+            {
+                'IndexName': 'organization_id-status-index',
+                'KeySchema': [
+                    {'AttributeName': 'organization_id', 'KeyType': 'HASH'},
+                    {'AttributeName': 'status', 'KeyType': 'RANGE'}
+                ],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ],
+        'SSESpecification': {'Enabled': True}
+    }
+
+
+def get_events_table_config():
+    """Get Events table configuration - Multi-tenant."""
+    return {
+        'TableName': Config.EVENTS_TABLE,
+        'KeySchema': [
+            {'AttributeName': 'organization_id_project_id', 'KeyType': 'HASH'},
+            {'AttributeName': 'event_timestamp', 'KeyType': 'RANGE'}
+        ],
+        'AttributeDefinitions': [
+            {'AttributeName': 'organization_id_project_id', 'AttributeType': 'S'},
+            {'AttributeName': 'event_timestamp', 'AttributeType': 'N'},
+            {'AttributeName': 'organization_id', 'AttributeType': 'S'}
         ],
         'BillingMode': 'PAY_PER_REQUEST',
         'GlobalSecondaryIndexes': [{
-            'IndexName': 'client_email-index',
+            'IndexName': 'organization_id-index',
             'KeySchema': [
-                {'AttributeName': 'client_email', 'KeyType': 'HASH'}
+                {'AttributeName': 'organization_id', 'KeyType': 'HASH'},
+                {'AttributeName': 'event_timestamp', 'KeyType': 'RANGE'}
             ],
             'Projection': {'ProjectionType': 'ALL'}
         }],
@@ -77,34 +155,51 @@ def get_projects_table_config():
     }
 
 
-def get_events_table_config():
-    """Get Events table configuration."""
-    return {
-        'TableName': Config.EVENTS_TABLE,
-        'KeySchema': [
-            {'AttributeName': 'project_id', 'KeyType': 'HASH'},
-            {'AttributeName': 'event_timestamp', 'KeyType': 'RANGE'}
-        ],
-        'AttributeDefinitions': [
-            {'AttributeName': 'project_id', 'AttributeType': 'S'},
-            {'AttributeName': 'event_timestamp', 'AttributeType': 'N'}
-        ],
-        'BillingMode': 'PAY_PER_REQUEST',
-        'SSESpecification': {'Enabled': True}
-    }
-
-
 def get_users_table_config():
-    """Get Users table configuration."""
+    """Get Users table configuration - Multi-tenant."""
     return {
         'TableName': Config.USERS_TABLE,
         'KeySchema': [
             {'AttributeName': 'user_email', 'KeyType': 'HASH'}
         ],
         'AttributeDefinitions': [
-            {'AttributeName': 'user_email', 'AttributeType': 'S'}
+            {'AttributeName': 'user_email', 'AttributeType': 'S'},
+            {'AttributeName': 'organization_id', 'AttributeType': 'S'}
         ],
         'BillingMode': 'PAY_PER_REQUEST',
+        'GlobalSecondaryIndexes': [{
+            'IndexName': 'organization_id-index',
+            'KeySchema': [
+                {'AttributeName': 'organization_id', 'KeyType': 'HASH'}
+            ],
+            'Projection': {'ProjectionType': 'ALL'}
+        }],
+        'SSESpecification': {'Enabled': True}
+    }
+
+
+def get_api_usage_table_config():
+    """Get API Usage table configuration."""
+    return {
+        'TableName': Config.API_USAGE_TABLE,
+        'KeySchema': [
+            {'AttributeName': 'organization_id_date', 'KeyType': 'HASH'},
+            {'AttributeName': 'timestamp', 'KeyType': 'RANGE'}
+        ],
+        'AttributeDefinitions': [
+            {'AttributeName': 'organization_id_date', 'AttributeType': 'S'},
+            {'AttributeName': 'timestamp', 'AttributeType': 'N'},
+            {'AttributeName': 'organization_id', 'AttributeType': 'S'}
+        ],
+        'BillingMode': 'PAY_PER_REQUEST',
+        'GlobalSecondaryIndexes': [{
+            'IndexName': 'organization_id-index',
+            'KeySchema': [
+                {'AttributeName': 'organization_id', 'KeyType': 'HASH'},
+                {'AttributeName': 'timestamp', 'KeyType': 'RANGE'}
+            ],
+            'Projection': {'ProjectionType': 'ALL'}
+        }],
         'SSESpecification': {'Enabled': True}
     }
 

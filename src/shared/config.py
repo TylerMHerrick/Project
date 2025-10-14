@@ -25,6 +25,8 @@ class Config:
     PROJECTS_TABLE: str = os.getenv('PROJECTS_TABLE', 'ProjectTracking-Projects-dev')
     EVENTS_TABLE: str = os.getenv('EVENTS_TABLE', 'ProjectTracking-Events-dev')
     USERS_TABLE: str = os.getenv('USERS_TABLE', 'ProjectTracking-Users-dev')
+    ORGANIZATIONS_TABLE: str = os.getenv('ORGANIZATIONS_TABLE', 'ProjectTracking-Organizations-dev')
+    API_USAGE_TABLE: str = os.getenv('API_USAGE_TABLE', 'ProjectTracking-APIUsage-dev')
     
     # SQS
     EMAIL_QUEUE_URL: str = os.getenv('EMAIL_QUEUE_URL', '')

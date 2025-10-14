@@ -18,6 +18,13 @@ openpyxl==3.1.2
 # OCR (optional - requires Tesseract installed)
 pytesseract==0.3.10
 
+# Authentication & Security
+PyJWT==2.8.0
+cryptography==42.0.0
+
+# Billing
+stripe==7.11.0
+
 # Utilities
 python-dotenv==1.0.0
 requests==2.31.0

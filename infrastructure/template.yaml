@@ -36,6 +36,8 @@ Globals:
         PROJECTS_TABLE: !Ref ProjectsTable
         EVENTS_TABLE: !Ref EventsTable
         USERS_TABLE: !Ref UsersTable
+        ORGANIZATIONS_TABLE: !Ref OrganizationsTable
+        API_USAGE_TABLE: !Ref APIUsageTable
 
 Resources:
   # S3 Bucket for Email Storage
@@ -131,27 +133,33 @@ Resources:
                 aws:SourceArn: !Ref EmailReceivedTopic
 
   # DynamoDB Tables
-  ProjectsTable:
+  
+  # Organizations Table - Multi-tenant management
+  OrganizationsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub ProjectTracking-Projects-${Environment}
+      TableName: !Sub ProjectTracking-Organizations-${Environment}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: project_id
+        - AttributeName: organization_id
           AttributeType: S
-        - AttributeName: created_at
-          AttributeType: N
-        - AttributeName: client_email
+        - AttributeName: email_address
+          AttributeType: S
+        - AttributeName: subdomain
           AttributeType: S
       KeySchema:
-        - AttributeName: project_id
+        - AttributeName: organization_id
           KeyType: HASH
-        - AttributeName: created_at
-          KeyType: RANGE
       GlobalSecondaryIndexes:
-        - IndexName: client_email-index
+        - IndexName: email_address-index
           KeySchema:
-            - AttributeName: client_email
+            - AttributeName: email_address
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: subdomain-index
+          KeySchema:
+            - AttributeName: subdomain
               KeyType: HASH
           Projection:
             ProjectionType: ALL
@@ -160,26 +168,79 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: false  # Enable in production
 
+  # Projects Table - Updated for multi-tenancy
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ProjectTracking-Projects-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: organization_id
+          AttributeType: S
+        - AttributeName: project_id_created_at
+          AttributeType: S
+        - AttributeName: client_email
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: organization_id
+          KeyType: HASH
+        - AttributeName: project_id_created_at
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: client_email-index
+          KeySchema:
+            - AttributeName: client_email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: organization_id-status-index
+          KeySchema:
+            - AttributeName: organization_id
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false  # Enable in production
+
+  # Events Table - Updated for multi-tenancy
   EventsTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub ProjectTracking-Events-${Environment}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: project_id
+        - AttributeName: organization_id_project_id
           AttributeType: S
         - AttributeName: event_timestamp
           AttributeType: N
+        - AttributeName: organization_id
+          AttributeType: S
       KeySchema:
-        - AttributeName: project_id
+        - AttributeName: organization_id_project_id
           KeyType: HASH
         - AttributeName: event_timestamp
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: organization_id-index
+          KeySchema:
+            - AttributeName: organization_id
+              KeyType: HASH
+            - AttributeName: event_timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       SSESpecification:
         SSEEnabled: true
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: false  # Enable in production
 
+  # Users Table - Updated for multi-tenancy
   UsersTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -188,11 +249,53 @@ Resources:
       AttributeDefinitions:
         - AttributeName: user_email
           AttributeType: S
+        - AttributeName: organization_id
+          AttributeType: S
       KeySchema:
         - AttributeName: user_email
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: organization_id-index
+          KeySchema:
+            - AttributeName: organization_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       SSESpecification:
         SSEEnabled: true
+
+  # API Usage Tracking Table - Real-time cost monitoring
+  APIUsageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ProjectTracking-APIUsage-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: organization_id_date
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+        - AttributeName: organization_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: organization_id_date
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: organization_id-index
+          KeySchema:
+            - AttributeName: organization_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true  # Auto-delete old usage data after 90 days
 
   # Lambda Functions
   EmailProcessorFunction:
@@ -216,6 +319,10 @@ Resources:
             TableName: !Ref EventsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrganizationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref APIUsageTable
         - SQSPollerPolicy:
             QueueName: !GetAtt EmailProcessingQueue.QueueName
         - Statement:
@@ -245,6 +352,10 @@ Resources:
             TableName: !Ref ProjectsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref EventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrganizationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref APIUsageTable
         - Statement:
             - Effect: Allow
               Action:
@@ -320,6 +431,79 @@ Resources:
         - Name: QueueName
           Value: !GetAtt EmailProcessingDLQ.QueueName
 
+  # Cognito User Pool for Authentication
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub project-tracker-users-${Environment}
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: false
+        - Name: organization_id
+          AttributeDataType: String
+          Mutable: false
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserPoolTags:
+        Environment: !Ref Environment
+        Application: project-tracker
+
+  # Cognito User Pool Client for Web App
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub project-tracker-web-${Environment}
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 1  # 1 hour
+      IdTokenValidity: 1  # 1 hour
+      RefreshTokenValidity: 30  # 30 days
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      ReadAttributes:
+        - email
+        - custom:organization_id
+        - custom:role
+      WriteAttributes:
+        - email
+
+  # Cognito User Pool Domain
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub project-tracker-${AWS::AccountId}-${Environment}
+      UserPoolId: !Ref UserPool
+
 Outputs:
   EmailBucket:
     Description: S3 bucket for email storage
@@ -356,4 +540,34 @@ Outputs:
     Value: !Ref UsersTable
     Export:
       Name: !Sub ${AWS::StackName}-UsersTable
+
+  OrganizationsTableName:
+    Description: DynamoDB Organizations table name
+    Value: !Ref OrganizationsTable
+    Export:
+      Name: !Sub ${AWS::StackName}-OrganizationsTable
+
+  APIUsageTableName:
+    Description: DynamoDB API Usage table name
+    Value: !Ref APIUsageTable
+    Export:
+      Name: !Sub ${AWS::StackName}-APIUsageTable
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  UserPoolDomain:
+    Description: Cognito User Pool Domain
+    Value: !Ref UserPoolDomain
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolDomain
 

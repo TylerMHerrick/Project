@@ -9,15 +9,37 @@ from .logger import setup_logger
 logger = setup_logger(__name__)
 
 
+# OpenAI Pricing (as of 2025-10-14, per 1M tokens)
+MODEL_PRICING = {
+    'gpt-4o-mini': {
+        'input': 0.15,  # $0.15 per 1M input tokens
+        'output': 0.60  # $0.60 per 1M output tokens
+    },
+    'gpt-4o': {
+        'input': 2.50,  # $2.50 per 1M input tokens
+        'output': 10.00  # $10.00 per 1M output tokens
+    },
+    'gpt-4-turbo': {
+        'input': 10.00,
+        'output': 30.00
+    }
+}
+
+
 class AIClient:
-    """Wrapper for OpenAI API operations."""
+    """Wrapper for OpenAI API operations with usage tracking."""
     
-    def __init__(self):
-        """Initialize OpenAI client."""
+    def __init__(self, organization_id: Optional[str] = None):
+        """Initialize OpenAI client.
+        
+        Args:
+            organization_id: Organization ID for usage tracking
+        """
         self.api_key = self._get_api_key()
         self.client = OpenAI(api_key=self.api_key)
         self.extraction_model = Config.OPENAI_MODEL_EXTRACTION
         self.estimation_model = Config.OPENAI_MODEL_ESTIMATION
+        self.organization_id = organization_id
     
     def _get_api_key(self) -> str:
         """Get OpenAI API key from Secrets Manager or environment.
@@ -112,6 +134,20 @@ Body:
                 response_format={"type": "json_object"}
             )
             
+            # Track usage and cost
+            usage = response.usage
+            cost = self._calculate_cost(
+                self.extraction_model,
+                usage.prompt_tokens,
+                usage.completion_tokens
+            )
+            self._track_usage(
+                self.extraction_model,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                cost
+            )
+            
             content = response.choices[0].message.content
             logger.info("Successfully extracted project data")
             return json.loads(content)
@@ -182,6 +218,20 @@ Provide detailed line items with quantities and unit costs."""
                 response_format={"type": "json_object"}
             )
             
+            # Track usage and cost
+            usage = response.usage
+            cost = self._calculate_cost(
+                self.estimation_model,
+                usage.prompt_tokens,
+                usage.completion_tokens
+            )
+            self._track_usage(
+                self.estimation_model,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                cost
+            )
+            
             content = response.choices[0].message.content
             logger.info("Successfully generated estimate")
             return json.loads(content)
@@ -233,6 +283,20 @@ Generate an appropriate response."""
                 temperature=0.7  # Higher temperature for more natural responses
             )
             
+            # Track usage and cost
+            usage = response.usage
+            cost = self._calculate_cost(
+                self.extraction_model,
+                usage.prompt_tokens,
+                usage.completion_tokens
+            )
+            self._track_usage(
+                self.extraction_model,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                cost
+            )
+            
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Failed to generate response: {str(e)}")
@@ -270,4 +334,59 @@ Generate an appropriate response."""
                 # Don't remove, but log for monitoring
         
         return text
+    
+    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost for API call based on token usage.
+        
+        Args:
+            model: Model name
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            
+        Returns:
+            Cost in USD
+        """
+        pricing = MODEL_PRICING.get(model, MODEL_PRICING['gpt-4o-mini'])
+        
+        input_cost = (input_tokens / 1_000_000) * pricing['input']
+        output_cost = (output_tokens / 1_000_000) * pricing['output']
+        total_cost = input_cost + output_cost
+        
+        logger.debug(f"Cost calculation for {model}: ${total_cost:.6f} "
+                    f"({input_tokens} input + {output_tokens} output tokens)")
+        
+        return total_cost
+    
+    def _track_usage(self, model: str, input_tokens: int, output_tokens: int, cost: float):
+        """Track API usage in DynamoDB for billing.
+        
+        Args:
+            model: Model name
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            cost: Cost in USD
+        """
+        if not self.organization_id:
+            logger.warning("No organization_id set, skipping usage tracking")
+            return
+        
+        try:
+            from .db_client import DynamoDBClient
+            db_client = DynamoDBClient()
+            
+            usage_data = {
+                'api_provider': 'openai',
+                'model': model,
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'tokens_used': input_tokens + output_tokens,
+                'cost_usd': round(cost, 6)
+            }
+            
+            db_client.track_api_usage(self.organization_id, usage_data)
+            logger.debug(f"Tracked usage for organization {self.organization_id}: ${cost:.6f}")
+            
+        except Exception as e:
+            logger.error(f"Failed to track API usage: {str(e)}")
+            # Don't fail the main operation if tracking fails
 
