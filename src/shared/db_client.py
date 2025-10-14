@@ -31,7 +31,8 @@ class DynamoDBClient:
             Project ID
         """
         project_id = f"PROJ-{uuid.uuid4()}"
-        timestamp = int(datetime.now().timestamp())
+        # Use milliseconds for timestamp to ensure uniqueness
+        timestamp = int(datetime.now().timestamp() * 1000)
         
         item = {
             'project_id': project_id,
@@ -101,7 +102,8 @@ class DynamoDBClient:
             if not project:
                 raise ValueError(f"Project {project_id} not found")
             
-            updates['updated_at'] = int(datetime.now().timestamp())
+            # Use milliseconds for timestamp to ensure uniqueness
+            updates['updated_at'] = int(datetime.now().timestamp() * 1000)
             
             # Build update expression
             update_expr = 'SET ' + ', '.join([f'#{k} = :{k}' for k in updates.keys()])
@@ -133,7 +135,8 @@ class DynamoDBClient:
             Event ID
         """
         event_id = str(uuid.uuid4())
-        timestamp = int(datetime.now().timestamp())
+        # Use milliseconds for timestamp to ensure uniqueness and proper ordering
+        timestamp = int(datetime.now().timestamp() * 1000)
         
         item = {
             'project_id': project_id,
@@ -181,7 +184,7 @@ class DynamoDBClient:
             raise ValueError("user_email is required")
         
         item = {
-            'created_at': int(datetime.now().timestamp()),
+            'created_at': int(datetime.now().timestamp() * 1000),
             'subscription_tier': 'free',
             'api_quota': 1000,
             **user_data

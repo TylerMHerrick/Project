@@ -269,7 +269,7 @@ def main():
     
     # Check if pytest is available
     try:
-        import pytest
+        import pytest  # noqa: F401
         print(f"{Colors.OKGREEN}[OK] pytest found{Colors.ENDC}")
     except ImportError:
         print(f"{Colors.FAIL}[ERROR] pytest not found. Installing...{Colors.ENDC}")

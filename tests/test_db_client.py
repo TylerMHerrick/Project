@@ -16,10 +16,14 @@ from shared.config import Config
 
 
 @pytest.fixture
-def dynamodb_setup():
+def dynamodb_setup(monkeypatch):
     """Set up mock DynamoDB tables."""
+    # Patch Config to not use LocalStack endpoint for moto tests
+    monkeypatch.setattr(Config, 'USE_LOCALSTACK', False)
+    monkeypatch.setattr(Config, 'AWS_ENDPOINT_URL', None)
+    
     with mock_dynamodb():
-        # Create mock tables
+        # Create mock tables  
         dynamodb = boto3.client('dynamodb', region_name='us-east-1')
         
         # Projects table
