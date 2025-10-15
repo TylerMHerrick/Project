@@ -1,8 +1,10 @@
-# AWS Setup Guide - Complete Walkthrough
+# AWS Setup Guide - GoDaddy Subdomain Configuration
 
-This guide will walk you through setting up your AWS account from scratch and deploying your email processing system for the first time.
+This guide will walk you through setting up your AWS account from scratch and deploying your email processing system using a subdomain approach.
 
-**Time Required**: 1-2 weeks (mostly waiting for approvals)
+**Setup Type**: Hybrid (Website on GoDaddy + Email on AWS)  
+**Email Format**: `clientname@project.yourdomain.com` (subdomain)  
+**Time Required**: 1-2 weeks (mostly waiting for approvals)  
 **Cost**: ~$15-30/month initially
 
 ---
@@ -14,7 +16,10 @@ Before starting, you'll need:
 - ✅ Email address (for AWS account)
 - ✅ Phone number (for MFA)
 - ✅ OpenAI API key (from platform.openai.com)
-- ✅ Domain name idea (we'll register it in AWS)
+- ✅ **Your existing GoDaddy domain** (you already have this!)
+- ✅ GoDaddy account login credentials
+
+**Your Setup**: This guide is customized for keeping your GoDaddy website unchanged while adding AWS email processing on a subdomain. Your website stays on GoDaddy, email goes to AWS. Both systems work independently with zero conflict.
 
 ---
 
@@ -142,38 +147,56 @@ Expected output:
 
 ---
 
-## Part 3: Domain Registration (5 minutes + 24-48 hour wait)
+## Part 3: GoDaddy Domain Setup (30 minutes)
 
-### Step 3.1: Register Domain in Route 53
+**Note**: You already have a domain at GoDaddy with an active website. We'll configure it to work with AWS while preserving your website (or migrating it).
+
+### Step 3.1: Create Route 53 Hosted Zone
+
+Even though your domain is registered at GoDaddy, you need a Route 53 hosted zone for AWS to manage DNS.
 
 1. Go to Route 53 Console: https://console.aws.amazon.com/route53/
-2. Click "Registered domains" → "Register domain"
-3. Search for your desired domain name
-4. Select a `.com` domain (recommended for professional use)
-5. Click "Add to cart" → "Continue"
-6. Fill in contact information:
-   - Contact type: Person or Company
-   - Enable privacy protection (hides your contact info from public WHOIS)
-7. Review and accept terms
-8. Click "Complete order"
+2. Click "Hosted zones" → "Create hosted zone"
+3. Domain name: Enter your GoDaddy domain (e.g., `yourdomain.com`)
+4. Type: "Public hosted zone"
+5. Click "Create hosted zone"
 
-**Cost**: ~$12-15/year (auto-renews)
+**✅ Checkpoint**: Hosted zone created. You'll see 4 NS (nameserver) records.
 
-**⏳ WAIT**: Domain registration takes 24-48 hours. You'll receive emails about:
-1. Domain registration request received
-2. Domain registered successfully
-3. Hosted zone created
+### Step 3.2: Setup Strategy - Subdomain for Email
 
-### Step 3.2: Verify Domain Registration
+**Your Setup**: Keep website on GoDaddy, use subdomain for AWS email processing
 
-After 24-48 hours:
+**What this means**:
+- Website stays at GoDaddy (no changes needed)
+- Email goes to: `anything@project.yourdomain.com` (or whatever subdomain you choose)
+- Both systems work independently
+- Zero downtime, zero risk to website
 
-1. Go to Route 53 → "Registered domains"
-2. Your domain should show status: "Active"
-3. Go to Route 53 → "Hosted zones"
-4. You should see a hosted zone for your domain
+**Why use subdomain?**
+- Safest approach - website won't be affected
+- Easy to test without disrupting existing setup
+- Can switch to root domain later when ready for production
+- Professional subdomains work fine: `acme@project.yourdomain.com`
 
-**✅ Checkpoint**: Domain is registered and hosted zone exists.
+### Step 3.3: Setup DNS Records in GoDaddy
+
+We'll add email records WITHOUT touching your website configuration.
+
+**In GoDaddy**:
+1. Log into GoDaddy
+2. Go to "My Products" → Find your domain → Click "DNS"
+3. **DO NOT change nameservers** - keep as-is
+4. **DO NOT modify** existing A, CNAME, or other records for your website
+5. We'll only ADD new records in the next steps
+
+**In Route 53**:
+1. Go to your hosted zone (already created in Step 3.1)
+2. Note the 4 nameserver values (like `ns-123.awsdns-12.com`)
+3. **You won't use these** - they're just there for AWS to know about your domain
+4. All DNS management stays in GoDaddy
+
+**✅ Checkpoint**: GoDaddy DNS panel open, existing records unchanged, ready to add new records.
 
 ---
 
@@ -192,20 +215,32 @@ After 24-48 hours:
 
 ### Step 4.2: Add DNS Records
 
-You'll see a screen with several DNS records to add. Copy them.
+You'll see a screen with several DNS records to add. **We'll add these to GoDaddy.**
 
-1. Go to Route 53 Console → "Hosted zones"
-2. Click your domain name
-3. For each SES record, click "Create record":
+**In GoDaddy DNS Manager**:
 
-**DKIM Records** (3 records):
-- Record type: CNAME
-- Name: [copy from SES, looks like `abc123._domainkey`]
-- Value: [copy from SES, looks like `abc123.dkim.amazonses.com`]
-- TTL: 300 (default)
-- Repeat for all 3 DKIM records
+1. Log into GoDaddy → "My Products" → Your domain → "DNS"
+2. Scroll down to the DNS records section
 
-**Wait 5-30 minutes for DNS propagation.**
+**Add DKIM Records** (3 CNAME records from SES):
+
+For each of the 3 DKIM records shown in SES:
+1. Click "Add" → Select "CNAME"
+2. **Name**: Enter the subdomain part only (e.g., if SES shows `abc123._domainkey.yourdomain.com`, just enter `abc123._domainkey`)
+3. **Value**: Enter the full value from SES (e.g., `abc123.dkim.amazonses.com`)
+4. **TTL**: 600 (or leave default)
+5. Click "Save"
+6. Repeat for all 3 DKIM records
+
+**Example**:
+```
+Name: abc123._domainkey
+Type: CNAME
+Value: abc123.dkim.amazonses.com
+TTL: 600
+```
+
+**⏳ Wait 5-30 minutes for DNS propagation.**
 
 ### Step 4.3: Verify Domain Status
 
@@ -427,15 +462,35 @@ UsersTableName      ProjectTracking-Users-dev
 
 ## Part 8: Configure SES Email Receipt (15 minutes)
 
-### Step 8.1: Create MX Record
+### Step 8.1: Create MX Record in GoDaddy (Subdomain)
 
-1. Go to Route 53 → "Hosted zones" → Click your domain
-2. Click "Create record"
-3. Record name: (leave blank for root domain, or enter subdomain like `mail`)
-4. Record type: MX
-5. Value: `10 inbound-smtp.us-east-1.amazonaws.com`
-6. TTL: 300
-7. Click "Create records"
+**What we're doing**: Adding an MX record for your subdomain so AWS can receive emails.
+
+**In GoDaddy DNS Manager**:
+
+1. Log into GoDaddy → "My Products" → Your domain → "DNS"
+2. Scroll to "Records" section
+3. Click "Add" → Select "MX"
+4. Enter the following:
+   - **Name**: `project` (or whatever subdomain you chose - this creates `project.yourdomain.com`)
+   - **Priority**: 10
+   - **Value**: `inbound-smtp.us-east-1.amazonaws.com`
+   - **TTL**: 600 (or leave default)
+5. Click "Save"
+
+**What this creates**:
+- Email sent to `anything@project.yourdomain.com` will be received by AWS
+- Examples: `acme@project.yourdomain.com`, `clientname@project.yourdomain.com`
+- Your existing email (if any) continues to work normally
+
+**Common subdomain choices**:
+- `project` → `acme@project.yourdomain.com`
+- `mail` → `acme@mail.yourdomain.com`
+- `tracking` → `acme@tracking.yourdomain.com`
+
+**Note**: You can change the subdomain name if you want, just remember what you used!
+
+**✅ Checkpoint**: MX record added for subdomain in GoDaddy.
 
 ### Step 8.2: Configure SES Receipt Rule
 
@@ -467,8 +522,10 @@ Replace values with your actual outputs from deployment.
 
 From a verified email address, send an email to:
 ```
-project@your-actual-domain.com
+anything@project.your-actual-domain.com
 ```
+
+**Note**: Replace `project` with whatever subdomain you chose in Step 8.1, and replace `your-actual-domain.com` with your actual domain.
 
 Subject: `New Project - Office Renovation`
 
@@ -589,6 +646,33 @@ Within 1-2 minutes, you should receive an acknowledgment email at the address yo
 2. Check CloudWatch Logs retention (reduce to 7 days for dev)
 3. Delete old S3 test emails
 
+### Issue: DNS records not working (GoDaddy specific)
+
+**Checks**:
+1. Verify you added records to GoDaddy, not Route 53
+2. Check for typos in CNAME/MX record values
+3. Remove any trailing dots from record values in GoDaddy
+4. Wait 10-15 minutes for GoDaddy DNS propagation
+5. Test DNS: `nslookup -type=MX yourdomain.com`
+6. Test DKIM: `nslookup -type=CNAME record-name._domainkey.yourdomain.com`
+
+### Issue: Website went down after DNS changes
+
+**Recovery**:
+1. Log into GoDaddy DNS immediately
+2. Check if A record for `@` or `www` was accidentally deleted
+3. Restore the A record (should point to your GoDaddy server IP)
+4. If you switched nameservers to Route 53, switch back to GoDaddy
+5. Contact GoDaddy support if needed
+
+### Issue: Email working but website not loading
+
+**Possible causes**:
+1. MX record correct, but A record missing
+2. Check GoDaddy DNS has A record for `@` pointing to website server
+3. Clear browser cache and try incognito mode
+4. Check GoDaddy website hosting is still active
+
 ---
 
 ## Next Steps
@@ -628,18 +712,82 @@ Keep track of your monthly costs:
 
 | Service | Expected Cost |
 |---------|--------------|
-| Route 53 | $0.50 |
+| Route 53 Hosted Zone | $0.50/month |
+| GoDaddy Domain (existing) | Already paid |
 | SES | $0 (receiving free) |
 | Lambda | $0-2 (under free tier) |
 | DynamoDB | $0-5 |
 | S3 | $1-2 |
 | OpenAI | $5-20 |
-| **Total** | **$7-30/month** |
+| **AWS Total** | **$7-30/month** |
 
 Check actual costs: AWS Console → Billing → Cost Explorer
 
 ---
 
+## Next Steps After Deployment
+
+🎉 **Your hybrid setup is complete!**
+
+### What You Have Now
+- ✅ Website running on GoDaddy (unchanged)
+- ✅ Email processing on AWS (subdomain)
+- ✅ Both systems working independently
+- ✅ Multi-client backend infrastructure ready
+
+### Immediate Next Steps
+1. **Test with real emails** - Forward project emails to your subdomain
+2. **Monitor AWS costs** - Check Billing dashboard daily for first week
+3. **Verify website** - Make sure your GoDaddy site still works
+4. **Check email flow** - Send several test emails from different addresses
+
+### Moving Forward
+- **Week 1-2**: Test thoroughly, refine AI prompts based on results
+- **Week 3-8**: Build multi-tenant features (follow NEXT_STEPS.md)
+- **Month 3+**: Build frontend dashboard for clients
+- **Future**: Optionally switch to root domain when ready for production clients
+
+### When Ready for Production
+Eventually, you can switch from subdomain to root domain for cleaner client emails:
+- Change from: `acme@project.yourdomain.com`
+- To: `acme@yourdomain.com`
+
+This requires updating the MX record in GoDaddy to point root domain (`@`) to AWS instead of subdomain (`project`). But there's no rush - subdomain works perfectly fine for testing and even production use.
+
+---
+
 **Last Updated**: 2025-10-14
 **Questions?**: Review other documentation files or create a detailed issue.
+
+## Important Notes for GoDaddy Users
+
+### DNS Management
+- You're managing DNS in **GoDaddy only** - simple and safe
+- Route 53 hosted zone exists but you're not using its nameservers
+- This hybrid setup is common and works great long-term
+
+### Email with Subdomains
+- Your client emails will look like: `clientname@project.yourdomain.com`
+- This is perfectly professional and works for production
+- Many SaaS products use subdomains (e.g., `support@help.company.com`)
+- You can switch to root domain later if preferred, but it's not required
+
+### Your Website
+- GoDaddy website is completely unaffected by AWS setup
+- All A records and website DNS stay in GoDaddy
+- No risk of downtime or website issues
+- Continue managing your website normally in GoDaddy
+
+### What's in Each System
+**GoDaddy manages**:
+- Your website (A records)
+- DKIM records for email verification (CNAME)
+- MX record for subdomain (points to AWS)
+
+**AWS manages**:
+- Email processing (Lambda, DynamoDB, S3)
+- AI extraction (OpenAI integration)
+- Backend infrastructure
+
+Both systems work together seamlessly without conflicts.
 

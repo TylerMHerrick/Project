@@ -407,14 +407,25 @@ Before considering the system "production-ready", verify:
 
 ## 🎯 Your Next Action
 
-**RIGHT NOW**: Start with `AWS_SETUP_GUIDE.md` Section 1.1
+**Since you have a GoDaddy domain**, you have two documents to guide you:
 
-Create your AWS account, then work through the guide step-by-step. Come back to this file after you've deployed to AWS.
+### Start Here: `GODADDY_AWS_SETUP.md`
+Quick reference guide specifically for your situation (GoDaddy domain + existing website). Read this first to understand the hybrid setup.
+
+### Detailed Steps: `AWS_SETUP_GUIDE.md`
+Complete walkthrough with step-by-step instructions. Follow this for the actual setup, starting at Section 1.1 (AWS Account Creation).
+
+**Important Notes**:
+- Your website will continue working normally
+- We'll add email processing without breaking anything
+- Start with subdomain (`project.yourdomain.com`) for safety
+- Switch to root domain when ready for production
 
 **Questions?** Review:
-1. `AWS_SETUP_GUIDE.md` for AWS help
-2. `IMPLEMENTATION_PROGRESS.md` for what's been built
-3. Code comments in updated files for technical details
+1. `GODADDY_AWS_SETUP.md` - Quick reference for your setup
+2. `AWS_SETUP_GUIDE.md` - Detailed AWS instructions
+3. `IMPLEMENTATION_PROGRESS.md` - Technical details of what's built
+4. Code comments in updated files for development help
 
 ---
 
